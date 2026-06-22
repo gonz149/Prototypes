@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MovingHome — Phase 0a プロトタイプ</title>
+<style>
+  :root{
+    --bg:#1b2530; --panel:#243341; --panel2:#2c3e50; --ink:#e8eef2;
+    --muted:#9fb0bd; --line:#3a4d5e; --accent:#7fb7a6; --accent2:#e0b072;
+    --fuel:#e0b072; --dura:#8fa9c9; --vita:#d98b8b; --good:#7fb7a6; --bad:#d98b8b;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:linear-gradient(160deg,#16202a,#1f2c38);
+    color:var(--ink); font-family:"Hiragino Sans","Yu Gothic",system-ui,sans-serif;
+    line-height:1.6; -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:880px; margin:0 auto; padding:18px 16px 60px;}
+  header{display:flex; align-items:baseline; justify-content:space-between; gap:12px; flex-wrap:wrap;}
+  h1{font-size:1.15rem; margin:0; letter-spacing:.04em; font-weight:600;}
+  .sub{color:var(--muted); font-size:.78rem;}
+  /* HUD */
+  .hud{display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin:14px 0;}
+  .stat{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px 12px;}
+  .stat .lbl{font-size:.72rem; color:var(--muted); display:flex; justify-content:space-between;}
+  .bar{height:8px; border-radius:6px; background:#16202a; margin-top:6px; overflow:hidden;}
+  .bar > i{display:block; height:100%; transition:width .35s ease;}
+  .meta{font-size:.74rem; color:var(--muted); margin:2px 0 0;}
+  /* Map */
+  .stage{position:relative; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px; margin-top:4px;}
+  #mapSvg{position:absolute; inset:14px; width:calc(100% - 28px); height:calc(100% - 28px); pointer-events:none;}
+  .cols{position:relative; display:flex; justify-content:space-between; gap:6px; min-height:260px;}
+  .col{display:flex; flex-direction:column; justify-content:space-around; gap:14px; flex:1;}
+  .node{
+    position:relative; z-index:2; border:1px solid var(--line); background:var(--panel2);
+    border-radius:10px; padding:8px 6px; text-align:center; cursor:default; opacity:.45;
+    transition:all .2s; font-size:.72rem;
+  }
+  .node .ico{font-size:1.1rem; line-height:1;}
+  .node .nm{color:var(--muted); margin-top:2px;}
+  .node.reachable{opacity:1; cursor:pointer; border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset;}
+  .node.reachable:hover{background:#33485c; transform:translateY(-2px);}
+  .node.current{opacity:1; border-color:var(--accent2); box-shadow:0 0 0 2px var(--accent2) inset; background:#37485a;}
+  .node.visited{opacity:.7;}
+  .node.dest{border-color:var(--accent2);}
+  /* Event panel */
+  .event{background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; margin-top:14px;}
+  .event h2{font-size:.95rem; margin:0 0 4px; color:var(--accent2);}
+  .arche{font-size:.7rem; color:var(--muted); text-transform:uppercase; letter-spacing:.08em;}
+  .situation{margin:10px 0 14px; color:var(--ink);}
+  .choices{display:grid; gap:10px;}
+  button.choice{
+    text-align:left; background:var(--panel2); color:var(--ink); border:1px solid var(--line);
+    border-radius:10px; padding:11px 14px; cursor:pointer; font-size:.9rem; font-family:inherit; transition:.15s;
+  }
+  button.choice:hover{border-color:var(--accent); background:#33485c;}
+  button.choice .cost{display:block; font-size:.74rem; color:var(--muted); margin-top:3px;}
+  .result{margin-top:6px; padding:12px 14px; border-radius:10px; background:#1c2935; border:1px dashed var(--line);}
+  .result .rtext{margin:0 0 8px;}
+  .delta{font-size:.82rem; display:inline-block; margin-right:12px;}
+  .delta.up{color:var(--good);} .delta.down{color:var(--bad);}
+  .btn{display:inline-block; margin-top:10px; background:var(--accent); color:#10201a; border:none;
+    border-radius:9px; padding:9px 18px; font-weight:600; cursor:pointer; font-family:inherit; font-size:.9rem;}
+  .btn.alt{background:var(--accent2); color:#2a1c08;}
+  .hint{color:var(--muted); font-size:.78rem; margin-top:10px;}
+  .banner{text-align:center; padding:22px; border-radius:12px; margin-top:14px;}
+  .banner.win{background:#22332c; border:1px solid var(--accent);}
+  .banner.lose{background:#33262a; border:1px solid var(--bad);}
+  .banner h2{margin:.2em 0;}
+  .log{margin-top:16px; font-size:.76rem; color:var(--muted); max-height:120px; overflow:auto;
+    border-top:1px solid var(--line); padding-top:8px;}
+  .log div{margin:2px 0;}
+  .skip{color:var(--muted); font-size:.78rem; background:none; border:none; cursor:pointer; text-decoration:underline; padding:0; margin-top:8px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>MovingHome <span class="sub">— Phase 0a プロトタイプ</span></h1>
+      <div class="sub">「どこに停まるか」を試すノード選択ループの検証版</div>
+    </div>
+    <div class="meta" id="metaInfo"></div>
+  </header>
+
+  <!-- HUD -->
+  <div class="hud" id="hud"></div>
+
+  <!-- Map -->
+  <div class="stage">
+    <svg id="mapSvg"></svg>
+    <div class="cols" id="cols"></div>
+  </div>
+
+  <!-- Event / Banner -->
+  <div id="panel"></div>
+
+  <div class="log" id="log"></div>
+</div>
+
+<script>
+/* =========================================================================
+   MovingHome — Phase 0a
+   単一ファイル・ブラウザ完結のノード選択ループ検証プロトタイプ
+   ロジックとノードデータは分離（NODES を後で実データCSVに差し替え可能）
+   ========================================================================= */
+
+/* --- リソース定義（0a: 燃料 / 耐久力=車HP / 体力=人HP） --- */
+const RES = {
+  fuel: {name:'燃料',   ico:'⛽', color:'var(--fuel)'},
+  dura: {name:'耐久力', ico:'🛠️', color:'var(--dura)'},
+  vita: {name:'体力',   ico:'❤️', color:'var(--vita)'},
+};
+const START = {fuel:60, dura:100, vita:100};
+const MAX   = {fuel:120, dura:120, vita:120};
+const TRAVEL_FUEL = 9; // 1ノード移動あたりの燃料消費
+
+/* =========================================================================
+   ノードデータ（14フィールド設計）
+   id, archetype, situation, choices[{label, cost{}, outcomes[{p,text,fx{}}]}],
+   correctness, skippable, hesitation, memo
+   ========================================================================= */
+const NODES = [
+  {
+    id:'N001', archetype:'resource-risk', ico:'🏚️', nm:'廃ガソリンスタンド',
+    situation:'蔦に覆われた給油所。地下タンクに燃料が残っていそうだが、ポンプを回すには車のバッテリーを酷使する。',
+    choices:[
+      {label:'タンクから燃料を吸い上げる', cost:{dura:-8},
+        outcomes:[
+          {p:.7, text:'良質な燃料を確保した。', fx:{fuel:+30}},
+          {p:.3, text:'劣化した燃料で、量も少ない。', fx:{fuel:+10}},
+        ]},
+      {label:'触らずに先へ進む', cost:{},
+        outcomes:[{p:1, text:'静かに通り過ぎた。', fx:{}}]},
+    ],
+    correctness:'燃料に余裕がなければ吸い上げる価値が高い', skippable:true, hesitation:true,
+    memo:'資源とリスクのトレードオフ原型',
+  },
+  {
+    id:'N002', archetype:'certainty-vs-gamble', ico:'🌉', nm:'崩れかけた橋',
+    situation:'対岸へ渡る橋は半ば崩落している。渡り切れれば近道だが、車の重量に耐えるかは賭けだ。',
+    choices:[
+      {label:'一気に渡る（賭け）', cost:{fuel:-4},
+        outcomes:[
+          {p:.55, text:'軋みながらも渡り切った。近道で燃料を節約。', fx:{fuel:+14}},
+          {p:.45, text:'橋桁が落ち、車体を強打した。', fx:{dura:-26, vita:-14}},
+        ]},
+      {label:'遠回りの確実な道を行く', cost:{},
+        outcomes:[{p:1, text:'時間と燃料はかかったが、無事だ。', fx:{}}]},
+    ],
+    correctness:'耐久力が低い時は遠回りが安全', skippable:false, hesitation:true,
+    memo:'確実性 vs ギャンブル',
+  },
+  {
+    id:'N003', archetype:'info-vs-resource', ico:'📡', nm:'放棄された観測塔',
+    situation:'錆びた電波塔。登れば先のルートを見渡せるが、体力を使うし足場は危うい。',
+    choices:[
+      {label:'塔に登って先を偵察する', cost:{vita:-10},
+        outcomes:[
+          {p:.8, text:'先の安全な停車地点を把握した。次の選択が読める。', fx:{}, reveal:true},
+          {p:.2, text:'足を滑らせ、得るものなく降りた。', fx:{vita:-6}},
+        ]},
+      {label:'登らずに勘で進む', cost:{},
+        outcomes:[{p:1, text:'未知のまま車を走らせる。', fx:{}}]},
+    ],
+    correctness:'分岐が多い局面では情報の価値が高い', skippable:true, hesitation:false,
+    memo:'情報 vs 資源',
+  },
+  {
+    id:'N004', archetype:'encounter-trust', ico:'🧍', nm:'道端の旅人',
+    situation:'焚き火のそばに座る旅人。手招きしている。施しを求めているのか、何かを差し出したいのか。',
+    choices:[
+      {label:'食料を分けてやる', cost:{},
+        outcomes:[
+          {p:.65, text:'礼に、近道の地図をくれた。燃料を節約できそうだ。', fx:{fuel:+12}},
+          {p:.35, text:'感謝されたが、それきりだった。', fx:{vita:-2}},
+        ]},
+      {label:'警戒して素通りする', cost:{},
+        outcomes:[{p:1, text:'視線を感じながら通り過ぎた。', fx:{}}]},
+    ],
+    correctness:'余裕がある時の善意は見返りが大きいことがある', skippable:true, hesitation:true,
+    memo:'人との遭遇・信頼の賭け（静かな人間ドラマ）',
+  },
+  {
+    id:'N005', archetype:'shelter-rest', ico:'🏕️', nm:'静かな湖畔',
+    situation:'波もない湖のほとり。安全そうだ。ここで一夜を明かせば体力が戻るが、夜明けは遠のく。',
+    choices:[
+      {label:'車中で休む', cost:{},
+        outcomes:[
+          {p:.85, text:'久しぶりに深く眠れた。', fx:{vita:+24}},
+          {p:.15, text:'物音で何度も目が覚めた。', fx:{vita:+8}},
+        ]},
+      {label:'休まず先を急ぐ', cost:{},
+        outcomes:[{p:1, text:'湖を背に走り出す。', fx:{}}]},
+    ],
+    correctness:'体力が削れている時の休息は最優先', skippable:true, hesitation:false,
+    memo:'休息・回復ノード（コージーの核）',
+  },
+  {
+    id:'N006', archetype:'salvage-hazard', ico:'🚙', nm:'乗り捨ての車列',
+    situation:'渋滞したまま朽ちた車の列。使える部品が眠っているが、不安定に積み上がっている。',
+    choices:[
+      {label:'部品を漁る', cost:{vita:-6},
+        outcomes:[
+          {p:.6, text:'交換用パーツを回収、車を修理できた。', fx:{dura:+26}},
+          {p:.4, text:'崩れた車体に挟まれかけた。', fx:{vita:-16, dura:+6}},
+        ]},
+      {label:'危険なので諦める', cost:{},
+        outcomes:[{p:1, text:'錆の匂いを残して離れた。', fx:{}}]},
+    ],
+    correctness:'耐久力が低い時は多少のリスクを取る価値あり', skippable:true, hesitation:true,
+    memo:'サルベージ・危険トレードオフ',
+  },
+  {
+    id:'N007', archetype:'weather-route', ico:'🌧️', nm:'迫る雨雲',
+    situation:'地平線に黒い雨雲。低地を突っ切れば速いが、冠水すれば車が傷む。高台は安全だが遠い。',
+    choices:[
+      {label:'低地を強行突破', cost:{fuel:-3},
+        outcomes:[
+          {p:.5, text:'雨が降り出す前に抜けた。', fx:{fuel:+8}},
+          {p:.5, text:'泥濘にはまり車体を痛めた。', fx:{dura:-24}},
+        ]},
+      {label:'高台へ迂回', cost:{},
+        outcomes:[{p:1, text:'雨を眺めながら安全に進んだ。', fx:{vita:+4}}]},
+    ],
+    correctness:'耐久力が心許ない時は迂回が無難', skippable:false, hesitation:true,
+    memo:'天候とルート判断',
+  },
+  {
+    id:'N008', archetype:'cache-gamble', ico:'📦', nm:'封印された地下倉庫',
+    situation:'施錠された地下倉庫。中身は分からない。こじ開けるには工具を消耗するが、当たれば大きい。',
+    choices:[
+      {label:'こじ開ける', cost:{dura:-6},
+        outcomes:[
+          {p:.4, text:'物資の山。燃料も部品も手に入った。', fx:{fuel:+20, dura:+18}},
+          {p:.4, text:'わずかな保存食だけ。', fx:{vita:+10}},
+          {p:.2, text:'空だった。徒労に終わった。', fx:{}},
+        ]},
+      {label:'手をつけない', cost:{},
+        outcomes:[{p:1, text:'扉に背を向けた。', fx:{}}]},
+    ],
+    correctness:'余剰資源がある時の投機向き', skippable:true, hesitation:true,
+    memo:'隠し倉庫・投機ギャンブル',
+  },
+];
+const nodeById = id => NODES.find(n=>n.id===id);
+
+/* =========================================================================
+   メタ進行：「プレイヤーは死ぬが、車は残る」
+   ランをまたいで車の記憶（carMemory）を保持。localStorageが使えれば永続化。
+   ========================================================================= */
+const META_KEY = 'movinghome_phase0a_meta';
+function loadMeta(){
+  try{ const m = JSON.parse(localStorage.getItem(META_KEY)); if(m) return m; }catch(e){}
+  return {runs:0, carMemory:0, bestProgress:0};
+}
+function saveMeta(){ try{ localStorage.setItem(META_KEY, JSON.stringify(META)); }catch(e){} }
+let META = loadMeta();
+
+/* =========================================================================
+   マップ生成（FTL型・複数列の分岐）
+   ========================================================================= */
+const COLS = 8;           // 列数（0=出発, 最終列=目的地）
+let MAP;                   // MAP[col] = [{node, links:[次列index...], visited}]
+let pos = {col:0, row:0};  // 現在地
+let state;                 // {fuel,dura,vita}
+let revealNext = false;    // 偵察成功で次の選択肢ヒント表示
+
+function rnd(a,b){return Math.floor(Math.random()*(b-a+1))+a;}
+function pick(arr){return arr[Math.floor(Math.random()*arr.length)];}
+
+function buildMap(){
+  MAP = [];
+  for(let c=0;c<COLS;c++){
+    let count;
+    if(c===0 || c===COLS-1) count=1;          // 出発・目的地は1
+    else count = rnd(2,3);
+    const col=[];
+    for(let r=0;r<count;r++){
+      let nd;
+      if(c===0) nd={id:'START', ico:'🚐', nm:'出発', start:true};
+      else if(c===COLS-1) nd={id:'GOAL', ico:'🏁', nm:'目的地', goal:true};
+      else nd = pick(NODES);
+      col.push({node:nd, links:[], visited:false, row:r});
+    }
+    MAP.push(col);
+  }
+  // リンク生成：各ノードから次列の1〜2ノードへ。次列全ノードが必ず1つ以上の入力を持つように補正。
+  for(let c=0;c<COLS-1;c++){
+    const next=MAP[c+1];
+    MAP[c].forEach((cell,r)=>{
+      const k=Math.min(next.length, rnd(1,2));
+      const idxs=[...next.keys()].sort(()=>Math.random()-0.5).slice(0,k);
+      // 近い行を優先で1本は必ず
+      const nearest=Math.min(next.length-1, Math.round(r*(next.length-1)/Math.max(1,MAP[c].length-1)));
+      if(!idxs.includes(nearest)) idxs[0]=nearest;
+      cell.links=[...new Set(idxs)];
+    });
+    // 入力ゼロの次列ノードを救済
+    next.forEach((_,ni)=>{
+      const hasIn=MAP[c].some(cell=>cell.links.includes(ni));
+      if(!hasIn){ MAP[c][rnd(0,MAP[c].length-1)].links.push(ni); }
+    });
+  }
+}
+
+/* =========================================================================
+   ゲーム進行
+   ========================================================================= */
+function newRun(){
+  state={...START};
+  if(META.carMemory>0){ // 車の記憶分、耐久力に永続ボーナス
+    state.dura=Math.min(MAX.dura, START.dura + META.carMemory*4);
+  }
+  buildMap();
+  pos={col:0, row:0};
+  MAP[0][0].visited=true;
+  revealNext=false;
+  logClear();
+  log(`新しい旅が始まる。車の記憶 Lv${META.carMemory}（耐久+${META.carMemory*4}）`);
+  render();
+  panel().innerHTML=`<div class="event">
+    <p class="situation">荒野に車を走らせる。<strong>どこに停まるか</strong>——それがすべてを決める。</p>
+    <p class="hint">光っているノードが次に行ける停車地点です。選ぶと移動（燃料 -${TRAVEL_FUEL}）し、その場所の出来事が起きます。目的地 🏁 を目指してください。</p>
+  </div>`;
+}
+
+function reachableFrom(){
+  const cell=MAP[pos.col][pos.row];
+  return (cell.links||[]).map(r=>({col:pos.col+1,row:r}));
+}
+
+function travelTo(col,row){
+  if(state.fuel < TRAVEL_FUEL){ log('燃料が尽きかけ、移動できない…'); return; }
+  apply({fuel:-TRAVEL_FUEL});
+  pos={col,row};
+  MAP[col][row].visited=true;
+  META.bestProgress=Math.max(META.bestProgress,col); saveMeta();
+  const cell=MAP[col][row];
+  if(cell.node.goal){ render(); win(); return; }
+  render();
+  showEvent(cell.node);
+}
+
+function apply(fx){
+  for(const k in fx){ if(state[k]!==undefined){ state[k]=Math.max(0,Math.min(MAX[k],state[k]+fx[k])); } }
+}
+
+function resolveChoice(node,ci){
+  const ch=node.choices[ci];
+  if(ch.cost) apply(ch.cost);
+  // 確率で結果抽選
+  const r=Math.random(); let acc=0, out=node.choices[ci].outcomes[0];
+  for(const o of ch.outcomes){ acc+=o.p; if(r<=acc){ out=o; break; } }
+  const before={...state};
+  if(out.fx) apply(out.fx);
+  if(out.reveal) revealNext=true;
+  const deltas={};
+  for(const k of Object.keys(RES)){ const d=state[k]-before[k]; if(ch.cost&&ch.cost[k]) deltas[k]=(deltas[k]||0); }
+  log(`${node.nm}：${ch.label} → ${out.text}`);
+  showResult(node, ch, out, before);
+  checkDeath();
+}
+
+function checkDeath(){
+  if(state.vita<=0){ lose('体力が尽きた。旅人はここで力尽きた。'); return true; }
+  if(state.dura<=0){ lose('車が完全に壊れ、動かなくなった。'); return true; }
+  if(state.fuel<TRAVEL_FUEL && !MAP[pos.col][pos.row].node.goal){
+    // まだ進めるなら継続。完全0かつ移動不可は立ち往生
+    if(state.fuel<=0){ lose('燃料が尽き、車は荒野で立ち往生した。'); return true; }
+  }
+  return false;
+}
+
+function win(){
+  META.runs++; META.carMemory++; saveMeta();
+  panel().innerHTML=`<div class="banner win">
+    <h2>🏁 目的地に到達</h2>
+    <p>残り — 燃料 ${state.fuel|0} / 耐久 ${state.dura|0} / 体力 ${state.vita|0}</p>
+    <p class="hint">車は次の旅へ記憶を引き継ぐ（車の記憶 Lv${META.carMemory}）</p>
+    <button class="btn" onclick="newRun()">次の旅へ</button></div>`;
+  renderMeta();
+}
+
+function lose(reason){
+  META.runs++; META.carMemory++; saveMeta(); // 死んでも車は残る＝記憶+1
+  panel().innerHTML=`<div class="banner lose">
+    <h2>旅の終わり</h2>
+    <p>${reason}</p>
+    <p class="hint">プレイヤーは死ぬ。しかし車は残る。<br>次の旅人がこの車を受け継ぐ（車の記憶 Lv${META.carMemory}）</p>
+    <button class="btn alt" onclick="newRun()">車を受け継ぐ</button></div>`;
+  renderMeta();
+  disableMap();
+}
+
+/* =========================================================================
+   描画
+   ========================================================================= */
+const $=id=>document.getElementById(id);
+const panel=()=>$('panel');
+
+function render(){ renderHud(); renderMeta(); renderMap(); }
+
+function renderHud(){
+  $('hud').innerHTML=Object.keys(RES).map(k=>{
+    const v=state[k], pct=Math.round(v/MAX[k]*100);
+    return `<div class="stat">
+      <div class="lbl"><span>${RES[k].ico} ${RES[k].name}</span><span>${v|0}</span></div>
+      <div class="bar"><i style="width:${pct}%;background:${RES[k].color}"></i></div></div>`;
+  }).join('');
+}
+
+function renderMeta(){
+  $('metaInfo').innerHTML=`旅の回数 ${META.runs} ・ 車の記憶 Lv${META.carMemory} ・ 最遠到達 列${META.bestProgress}/${COLS-1}`;
+}
+
+function renderMap(){
+  const reach=reachableFrom();
+  const isReach=(c,r)=>reach.some(x=>x.col===c&&x.row===r);
+  $('cols').innerHTML=MAP.map((col,c)=>
+    `<div class="col">`+col.map((cell,r)=>{
+      const cls=['node'];
+      if(c===pos.col&&r===pos.row) cls.push('current');
+      else if(cell.visited) cls.push('visited');
+      if(isReach(c,r)) cls.push('reachable');
+      if(cell.node.goal) cls.push('dest');
+      const click=isReach(c,r)?`onclick="travelTo(${c},${r})"`:'';
+      let hint='';
+      if(revealNext && isReach(c,r) && cell.node.archetype){
+        hint=`<div class="nm" style="color:var(--accent2)">${cell.node.archetype}</div>`;
+      }
+      return `<div class="${cls.join(' ')}" ${click}>
+        <div class="ico">${cell.node.ico}</div>
+        <div class="nm">${cell.node.nm}</div>${hint}</div>`;
+    }).join('')+`</div>`
+  ).join('');
+  drawEdges();
+}
+
+function drawEdges(){
+  const svg=$('mapSvg'), cols=$('cols');
+  const cr=cols.getBoundingClientRect();
+  svg.setAttribute('viewBox',`0 0 ${cr.width} ${cr.height}`);
+  const cells=[...cols.querySelectorAll('.col')].map(col=>[...col.querySelectorAll('.node')]);
+  let lines='';
+  MAP.forEach((col,c)=>{
+    if(c===COLS-1) return;
+    col.forEach((cell,r)=>{
+      const a=cells[c]&&cells[c][r]; if(!a) return;
+      const ar=a.getBoundingClientRect();
+      const x1=ar.right-cr.left, y1=ar.top-cr.top+ar.height/2;
+      cell.links.forEach(nr=>{
+        const b=cells[c+1]&&cells[c+1][nr]; if(!b) return;
+        const br=b.getBoundingClientRect();
+        const x2=br.left-cr.left, y2=br.top-cr.top+br.height/2;
+        const mx=(x1+x2)/2;
+        const active=(c===pos.col&&r===pos.row);
+        lines+=`<path d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}"
+          fill="none" stroke="${active?'var(--accent)':'var(--line)'}" stroke-width="${active?2:1.2}" opacity="${active?1:.6}"/>`;
+      });
+    });
+  });
+  svg.innerHTML=lines;
+}
+
+function disableMap(){
+  [...document.querySelectorAll('.node.reachable')].forEach(n=>{n.classList.remove('reachable');n.onclick=null;});
+}
+
+/* --- イベント／結果パネル --- */
+function showEvent(node){
+  if(!node.choices){ render(); return; }
+  const skipBtn = node.skippable
+    ? `<button class="skip" onclick="afterEvent()">…様子を見て先へ進む（スキップ）</button>` : '';
+  panel().innerHTML=`<div class="event">
+    <div class="arche">${node.archetype}${node.hesitation?' ・ 迷いどころ':''}</div>
+    <h2>${node.ico} ${node.nm}</h2>
+    <p class="situation">${node.situation}</p>
+    <div class="choices">${node.choices.map((ch,i)=>{
+      const cost=ch.cost&&Object.keys(ch.cost).length
+        ? '消費 '+Object.entries(ch.cost).map(([k,v])=>`${RES[k].name}${v>0?'+':''}${v}`).join(' / ') : 'コストなし';
+      return `<button class="choice" onclick="resolveChoice(nodeById('${node.id}'),${i})">
+        ${ch.label}<span class="cost">${cost}</span></button>`;
+    }).join('')}</div>
+    ${skipBtn}</div>`;
+}
+
+function showResult(node, ch, out, before){
+  const deltaHtml=Object.keys(RES).map(k=>{
+    const d=state[k]-before[k]; if(!d) return '';
+    return `<span class="delta ${d>0?'up':'down'}">${RES[k].ico}${RES[k].name} ${d>0?'+':''}${d}</span>`;
+  }).join('');
+  panel().innerHTML=`<div class="event">
+    <h2>${node.ico} ${node.nm}</h2>
+    <div class="result">
+      <p class="rtext">${out.text}</p>
+      <div>${deltaHtml||'<span class="delta">変化なし</span>'}</div>
+    </div>
+    <button class="btn" onclick="afterEvent()">先へ進む</button>
+  </div>`;
+}
+
+function afterEvent(){
+  if(checkDeath()) return;
+  const reach=reachableFrom();
+  if(reach.length===0){ // 行き止まり＝実質目的地手前のはず。念のため
+    panel().innerHTML=`<div class="event"><p class="situation">この先に道はない。旅はここまでだ。</p>
+      <button class="btn" onclick="newRun()">新しい旅へ</button></div>`;
+    return;
+  }
+  panel().innerHTML=`<div class="event"><p class="hint">マップから次に停まるノードを選んでください（移動で燃料 -${TRAVEL_FUEL}）。</p></div>`;
+  render();
+}
+
+/* --- ログ --- */
+function log(t){ const l=$('log'); const d=document.createElement('div'); d.textContent='・'+t; l.prepend(d); }
+function logClear(){ $('log').innerHTML=''; }
+
+window.addEventListener('resize', ()=>{ if(MAP) drawEdges(); });
+
+/* --- 起動 --- */
+newRun();
+</script>
+</body>
+</html>
