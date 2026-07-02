@@ -20,40 +20,49 @@
 <body>
   <h1>🍣 ブロック崩寿司 <span style="font-size:11px;opacity:.5">prototype</span></h1>
   <div id="hud">
-    <span>皿 <b id="lives">●●●</b></span>
+    <span>皿(場) <b id="dishes">0</b></span>
     <span>客 <b id="left">0</b></span>
     <span>満足 <b id="score">0</b></span>
+    <span>供給 <b id="rate">–</b></span>
   </div>
   <canvas id="cv" width="480" height="640"></canvas>
   <div id="hint">バーを左右に動かして皿を打ち返す（マウス / スワイプ / ←→）<br>
-    打ち返すと寿司が載る → 寿司付きの皿を客に当てると満足して退店。空の皿だと客は後退するだけ。</div>
+    皿は自動供給され、満足させるほど供給が早まる。落ちた皿は退場（ペナルティなし）。<br>
+    客がバーに到達したらゲームオーバー。</div>
 
 <script>
 const cv=document.getElementById('cv'),ctx=cv.getContext('2d');
 const W=cv.width,H=cv.height;
-const elLives=document.getElementById('lives'),elLeft=document.getElementById('left'),elScore=document.getElementById('score');
+const elDishes=document.getElementById('dishes'),elLeft=document.getElementById('left'),
+      elScore=document.getElementById('score'),elRate=document.getElementById('rate');
 
 // ---- 調整できるパラメータ（仕様の暫定値） ----
 const CFG={
   cols:5, rows:3, blockGap:8, blockTop:70, blockH:34,
   ballR:11, paddleW:96, paddleH:14, paddleY:H-40,
   speed:5,            // ボール速度
-  lives:3,            // 失える皿の枚数
   retreatStep:18,     // 空の皿が当たったとき客が後退（上に）する距離
-  advanceSpeed:0.11,  // 客がレーンを下りてくる速さ（px/frame）※従来の1/2
-  advanceDelay:10,    // ゲーム開始から客が動き出すまでの秒数
-  spawnInterval:5,    // 客が新たに供給される間隔（秒）
-  spawnStart:10,      // ゲーム開始から供給が始まるまでの秒数
+  // --- 客（需要側） ---
+  advanceSpeed:0.11,  // 客がレーンを下りてくる速さ（px/frame）
+  advanceDelay:10,    // 開始から客が動き出すまでの秒数
+  custInterval:5,     // 客が供給される間隔（秒）
+  custStart:10,       // 開始から客供給が始まるまでの秒数
+  // --- 皿（蛇口モデル / 供給側） ---
+  plateBase:4.0,      // 皿の基準供給間隔（秒）
+  plateReduction:0.12,// 満足1件あたりの供給間隔 短縮量（秒）
+  plateFloor:1.2,     // 供給間隔の下限（これ以上は速くならない床）
 };
 
-let paddleX, ball, blocks, lives, score, state, gameStartTime, nextSpawnT, bw; // state: 'ready'|'play'|'lose'
+let paddleX, balls, blocks, score, state, gameStartTime, nextCustT, nextPlateT, bw;
+// state: 'ready' | 'play' | 'lose'
 
-function reset(full){
-  paddleX=W/2;
-  if(full){ lives=CFG.lives; score=0; buildBlocks(); gameStartTime=null; nextSpawnT=CFG.spawnStart; }
-  ball={x:paddleX, y:CFG.paddleY-CFG.ballR-2, vx:0, vy:0, loaded:false, stuck:true};
-  state='ready';
-  draw();
+// 現在の皿供給間隔（満足数が増えるほど短くなる、床あり）
+function plateInterval(){ return Math.max(CFG.plateFloor, CFG.plateBase-score*CFG.plateReduction); }
+
+function reset(){
+  paddleX=W/2; balls=[]; score=0; buildBlocks();
+  gameStartTime=null; nextCustT=CFG.custStart; nextPlateT=CFG.plateBase;
+  state='ready'; draw();
 }
 function colX(c){ return CFG.blockGap+c*(bw+CFG.blockGap); }
 function buildBlocks(){
@@ -64,7 +73,7 @@ function buildBlocks(){
       w:bw, h:CFG.blockH, alive:true, flash:0});
   }
 }
-// 上から新しい客を供給（空いている列のいちばん上に出現）
+// 客を上から供給（空いている列のいちばん上に出現）
 function spawnCustomer(){
   const free=[];
   for(let c=0;c<CFG.cols;c++){
@@ -77,10 +86,14 @@ function spawnCustomer(){
     blocks.push({x:cx, y:CFG.blockTop, w:bw, h:CFG.blockH, alive:true, flash:0});
   }
 }
-function launch(){
-  if(state==='ready'){ ball.stuck=false; ball.vx=(Math.random()*2-1)*2; ball.vy=-CFG.speed; state='play';
-    if(gameStartTime===null) gameStartTime=performance.now(); }
-  else if(state==='win'||state==='lose'){ reset(true); }
+// 皿をカウンター（バー）から上へ供給。空の状態で出る。
+function spawnPlate(){
+  balls.push({x:paddleX, y:CFG.paddleY-CFG.ballR-2,
+    vx:(Math.random()*2-1)*2, vy:-CFG.speed, loaded:false});
+}
+function start(){
+  if(state==='ready'){ state='play'; gameStartTime=performance.now(); spawnPlate(); }
+  else if(state==='lose'){ reset(); }
 }
 
 // ---- 入力 ----
@@ -91,67 +104,62 @@ function movePaddle(x){
 }
 cv.addEventListener('mousemove',e=>movePaddle(e.clientX));
 cv.addEventListener('touchmove',e=>{movePaddle(e.touches[0].clientX);e.preventDefault();},{passive:false});
-cv.addEventListener('mousedown',launch);
-cv.addEventListener('touchstart',e=>{launch();e.preventDefault();},{passive:false});
+cv.addEventListener('mousedown',start);
+cv.addEventListener('touchstart',e=>{start();e.preventDefault();},{passive:false});
 addEventListener('keydown',e=>{
   if(e.key==='ArrowLeft')paddleX=Math.max(CFG.paddleW/2,paddleX-28);
   if(e.key==='ArrowRight')paddleX=Math.min(W-CFG.paddleW/2,paddleX+28);
-  if(e.key===' '){launch();e.preventDefault();}
+  if(e.key===' '){start();e.preventDefault();}
 });
 
 // ---- 更新 ----
 function update(){
   if(state==='play'){
-    ball.x+=ball.vx; ball.y+=ball.vy;
-    // 壁
-    if(ball.x<CFG.ballR){ball.x=CFG.ballR;ball.vx*=-1;}
-    if(ball.x>W-CFG.ballR){ball.x=W-CFG.ballR;ball.vx*=-1;}
-    if(ball.y<CFG.ballR){ball.y=CFG.ballR;ball.vy*=-1;}
-    // バー
     const px0=paddleX-CFG.paddleW/2, px1=paddleX+CFG.paddleW/2;
-    if(ball.vy>0 && ball.y+CFG.ballR>=CFG.paddleY && ball.y<CFG.paddleY+CFG.paddleH
-       && ball.x>px0 && ball.x<px1){
-      ball.y=CFG.paddleY-CFG.ballR;
-      const rel=(ball.x-paddleX)/(CFG.paddleW/2); // -1..1
-      ball.vx=rel*CFG.speed*0.9;
-      ball.vy=-Math.sqrt(Math.max(1,CFG.speed*CFG.speed-ball.vx*ball.vx));
-      ball.loaded=true; // ← 打ち返すと寿司が載る
-    }
-    // 落下＝皿を失う
-    if(ball.y-CFG.ballR>H){
-      lives--;
-      if(lives<=0){ state='lose'; } else { reset(false); }
-    }
-    // ブロック（客）
-    for(const b of blocks){
-      if(!b.alive)continue;
-      if(ball.x>b.x-CFG.ballR && ball.x<b.x+b.w+CFG.ballR &&
-         ball.y>b.y-CFG.ballR && ball.y<b.y+b.h+CFG.ballR){
-        // 反射方向の判定（簡易）
-        const overL=ball.x-(b.x-CFG.ballR), overR=(b.x+b.w+CFG.ballR)-ball.x;
-        const overT=ball.y-(b.y-CFG.ballR), overB=(b.y+b.h+CFG.ballR)-ball.y;
-        const m=Math.min(overL,overR,overT,overB);
-        if(m===overT||m===overB)ball.vy*=-1; else ball.vx*=-1;
-        if(ball.loaded){            // 寿司付き → 満足して退店
-          b.alive=false; ball.loaded=false; score++;
-        }else{                      // 空 → 上にノックバックするだけ
-          b.y=Math.max(CFG.blockTop-CFG.retreatStep, b.y-CFG.retreatStep); b.flash=8;
+    // 皿ごとの物理
+    for(const ball of balls){
+      ball.x+=ball.vx; ball.y+=ball.vy;
+      // 壁
+      if(ball.x<CFG.ballR){ball.x=CFG.ballR;ball.vx*=-1;}
+      if(ball.x>W-CFG.ballR){ball.x=W-CFG.ballR;ball.vx*=-1;}
+      if(ball.y<CFG.ballR){ball.y=CFG.ballR;ball.vy*=-1;}
+      // バー
+      if(ball.vy>0 && ball.y+CFG.ballR>=CFG.paddleY && ball.y<CFG.paddleY+CFG.paddleH
+         && ball.x>px0 && ball.x<px1){
+        ball.y=CFG.paddleY-CFG.ballR;
+        const rel=(ball.x-paddleX)/(CFG.paddleW/2);
+        ball.vx=rel*CFG.speed*0.9;
+        ball.vy=-Math.sqrt(Math.max(1,CFG.speed*CFG.speed-ball.vx*ball.vx));
+        ball.loaded=true; // 打ち返すと寿司が載る
+      }
+      // 客（ブロック）
+      for(const b of blocks){
+        if(!b.alive)continue;
+        if(ball.x>b.x-CFG.ballR && ball.x<b.x+b.w+CFG.ballR &&
+           ball.y>b.y-CFG.ballR && ball.y<b.y+b.h+CFG.ballR){
+          const overL=ball.x-(b.x-CFG.ballR), overR=(b.x+b.w+CFG.ballR)-ball.x;
+          const overT=ball.y-(b.y-CFG.ballR), overB=(b.y+b.h+CFG.ballR)-ball.y;
+          const m=Math.min(overL,overR,overT,overB);
+          if(m===overT||m===overB)ball.vy*=-1; else ball.vx*=-1;
+          if(ball.loaded){ b.alive=false; ball.loaded=false; score++; } // 満足退店 +1
+          else{ b.y=Math.max(CFG.blockTop-CFG.retreatStep, b.y-CFG.retreatStep); b.flash=8; } // ノックバック
+          break;
         }
-        break;
       }
     }
-    const elapsed=gameStartTime!==null?(performance.now()-gameStartTime)/1000:0;
-    // 客がレーンを下りてくる（開始 advanceDelay 秒後から）
-    if(elapsed>=CFG.advanceDelay){
-      blocks.forEach(b=>{ if(b.alive) b.y+=CFG.advanceSpeed; });
-    }
-    // 客を時間で追加供給（spawnStart 秒後から spawnInterval 秒ごと）
-    while(elapsed>=nextSpawnT){ spawnCustomer(); nextSpawnT+=CFG.spawnInterval; }
-    // プレイヤー（バー）と客が接触 → ゲームオーバー（スコアアタック: 勝ちなし）
+    // 落ちた皿は退場（ペナルティなし＝ボール経済の排出口）
+    balls=balls.filter(ball=>ball.y-CFG.ballR<=H);
+
+    const elapsed=(performance.now()-gameStartTime)/1000;
+    // 客がレーンを下りてくる
+    if(elapsed>=CFG.advanceDelay) blocks.forEach(b=>{ if(b.alive) b.y+=CFG.advanceSpeed; });
+    // 客の時間供給
+    while(elapsed>=nextCustT){ spawnCustomer(); nextCustT+=CFG.custInterval; }
+    // 皿の蛇口供給（満足数に応じて間隔が短縮）
+    while(elapsed>=nextPlateT){ spawnPlate(); nextPlateT+=plateInterval(); }
+    // 唯一の敗北条件：客がバーに到達
     if(blocks.some(b=>b.alive && b.y+b.h>=CFG.paddleY)) state='lose';
-    blocks=blocks.filter(b=>b.alive); // 退店した客を配列から除去
-  } else if(state==='ready'){
-    ball.x=paddleX; ball.y=CFG.paddleY-CFG.ballR-2;
+    blocks=blocks.filter(b=>b.alive);
   }
   blocks&&blocks.forEach(b=>{if(b.flash>0)b.flash--;});
 }
@@ -159,6 +167,12 @@ function update(){
 // ---- 描画 ----
 function rr(x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);
   ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();}
+function drawPlate(ball){
+  ctx.fillStyle='#f2efe6';ctx.beginPath();ctx.arc(ball.x,ball.y,CFG.ballR,0,7);ctx.fill();
+  ctx.strokeStyle='#cfc7b5';ctx.lineWidth=2;ctx.stroke();
+  if(ball.loaded){ctx.font='16px serif';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillText('🍣',ball.x,ball.y-1);}
+}
 function draw(){
   ctx.clearRect(0,0,W,H);
   // 客
@@ -171,27 +185,26 @@ function draw(){
   });
   // バー（カウンター）
   ctx.fillStyle='#8a5a2b';rr(paddleX-CFG.paddleW/2,CFG.paddleY,CFG.paddleW,CFG.paddleH,7);ctx.fill();
-  // 皿＋寿司
-  ctx.fillStyle='#f2efe6';ctx.beginPath();ctx.arc(ball.x,ball.y,CFG.ballR,0,7);ctx.fill();
-  ctx.strokeStyle='#cfc7b5';ctx.lineWidth=2;ctx.stroke();
-  if(ball.loaded){ctx.font='16px serif';ctx.textAlign='center';ctx.textBaseline='middle';
-    ctx.fillText('🍣',ball.x,ball.y-1);}
+  // 皿
+  if(state==='ready') drawPlate({x:paddleX,y:CFG.paddleY-CFG.ballR-2,loaded:false});
+  else balls.forEach(drawPlate);
   // メッセージ
   if(state!=='play'){
     ctx.fillStyle='rgba(0,0,0,.55)';ctx.fillRect(0,H/2-46,W,92);
     ctx.fillStyle='#ffcf6b';ctx.font='bold 22px sans-serif';ctx.textAlign='center';
-    const msg=state==='win'?'🎉 全員満足！ 完食':state==='lose'?'💢 客が押し寄せた…':'タップ / スペースで開始';
+    const msg=state==='lose'?'💢 客が押し寄せた…':'タップ / スペースで開始';
     ctx.fillText(msg,W/2,H/2-6);
-    if(state==='win'||state==='lose'){ctx.font='14px sans-serif';ctx.fillStyle='#f5e9d6';
-      ctx.fillText('もう一度遊ぶ → タップ',W/2,H/2+22);}
+    if(state==='lose'){ctx.font='14px sans-serif';ctx.fillStyle='#f5e9d6';
+      ctx.fillText('満足客 '+score+' 人　—　もう一度 → タップ',W/2,H/2+22);}
   }
   // HUD
-  elLives.textContent='●'.repeat(Math.max(0,lives))||'—';
+  elDishes.textContent=balls?balls.length:0;
   elLeft.textContent=blocks?blocks.filter(b=>b.alive).length:0;
   elScore.textContent=score;
+  elRate.textContent=(state==='play')?plateInterval().toFixed(1)+'秒':'–';
 }
 function loop(){update();draw();requestAnimationFrame(loop);}
-reset(true);loop();
+reset();loop();
 </script>
 </body>
 </html>
