@@ -41,6 +41,8 @@ const elLv=document.getElementById('lv'),elScore=document.getElementById('score'
 // ---- 調整できるパラメータ（仕様の暫定値） ----
 const CFG={
   cols:5, blockGap:8, blockTop:64, blockH:34,
+  initRows:3,              // 初期の客の段数（cols×initRows = 初期人数。5×3=15体）
+  spawnBatch:2,            // 1回の湧きで出る客数（頻度はそのまま、量を倍に）
   ballR:11, paddleW:96, paddleH:14, paddleY:H-40,
   speed:5,
   retreatStep:18,          // ノックバック距離
@@ -95,7 +97,9 @@ function colX(c){ return CFG.blockGap+c*(bw+CFG.blockGap); }
 function buildBlocks(){
   blocks=[];
   bw=(W-CFG.blockGap*(CFG.cols+1))/CFG.cols;
-  for(let c=0;c<CFG.cols;c++) addCustomer(colX(c), CFG.blockTop, 1); // 初期は各列1人HP1
+  const rowGap=CFG.blockH+CFG.blockGap;
+  for(let c=0;c<CFG.cols;c++) for(let r=0;r<CFG.initRows;r++)
+    addCustomer(colX(c), CFG.blockTop+r*rowGap, r===0?2:1); // 一番上の段(r=0)はHP2、他はHP1
 }
 function addCustomer(x,y,hp){
   blocks.push({x, y, w:bw, h:CFG.blockH, hp, maxHp:hp, alive:true, flash:0});
@@ -187,7 +191,7 @@ function update(){
 
     const elapsed=(performance.now()-gameStartTime)/1000;
     if(elapsed>=CFG.advanceDelay) blocks.forEach(b=>{ if(b.alive) b.y+=CFG.advanceSpeed; });
-    while(elapsed>=nextCustT){ spawnCustomer(); nextCustT+=custInterval(); } // 湧き（レベルで短縮）
+    while(elapsed>=nextCustT){ for(let i=0;i<CFG.spawnBatch;i++) spawnCustomer(); nextCustT+=custInterval(); } // 湧き（量=spawnBatch、間隔はレベルで短縮）
     while(elapsed>=nextPlateT){ spawnPlate(false); nextPlateT+=plateInterval(); } // 蛇口（ΣHPで短縮）
     if(blocks.some(b=>b.alive && b.y+b.h>=CFG.paddleY)) state='lose'; // 唯一の敗北条件
     blocks=blocks.filter(b=>b.alive);
