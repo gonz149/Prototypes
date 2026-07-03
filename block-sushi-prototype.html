@@ -84,11 +84,17 @@ const HP_TABLE=[
   {lv:5, w:{1:35, 2:30, 3:23, 5:12}},
 ];
 const HP_COLOR={1:'#e0b57a', 2:'#d59a55', 3:'#c47a3c', 5:'#9e5228'};
-// 節目バナー（HP帯の初登場レベルに同期。文言はすべて仮）
-const BANNERS={1:'🍽 ランチラッシュ！', 2:'👥 団体様ご来店', 3:'🍚 大食い自慢ご来店', 12:'🏮 深夜営業'};
+// 節目の出来事（層B＝ビート）。banner=実況文言／debutHp=デビュー保証HP／wave=空きスロットへの一括投入数。文言・数値は仮。
+const MILESTONES={
+  1:{banner:'🍽 ランチラッシュ！', debutHp:2, wave:4},
+  2:{banner:'👥 団体様ご来店',     debutHp:3, wave:5},
+  3:{banner:'🍚 大食い自慢ご来店', debutHp:5, wave:2},
+  7:{banner:'🍶 ディナーラッシュ！', wave:6},       // 新要素なし・純粋な大ウェーブ
+  12:{banner:'🏮 深夜営業'},                        // ランプ停止の告知（時計停止）
+};
 
 let paddleX, balls, blocks, score, satisfied, state, gameStartTime, nextCustT, nextPlateT, bw;
-let prevLevel, bannerText, bannerUntil, lastPlateAt, curPlateGap, satFlashUntil, gElapsed, stock;
+let prevLevel, bannerText, bannerUntil, lastPlateAt, curPlateGap, satFlashUntil, gElapsed, stock, debutQueue;
 // state: 'ready' | 'play' | 'lose'
 
 function level(){ return Math.floor(score/CFG.levelN); }
@@ -111,7 +117,7 @@ function reset(){
   paddleX=W/2; balls=[]; score=0; satisfied=0; buildBlocks();
   gameStartTime=null; nextCustT=CFG.custStart; nextPlateT=CFG.plateBase;
   prevLevel=0; bannerText=''; bannerUntil=0; lastPlateAt=0; curPlateGap=CFG.plateBase;
-  satFlashUntil=0; gElapsed=0; stock=0;
+  satFlashUntil=0; gElapsed=0; stock=0; debutQueue=[];
   state='ready'; draw();
 }
 function colX(c){ return CFG.blockGap+c*(bw+CFG.blockGap); }
@@ -136,9 +142,12 @@ function spawnCustomer(){
   }
   if(elig.length){
     const cx=elig[Math.floor(Math.random()*elig.length)];
-    addCustomer(cx, CFG.blockTop, pickHp());
+    const hp=debutQueue.length?debutQueue.shift():pickHp(); // デビュー保証があれば確定で出す
+    addCustomer(cx, CFG.blockTop, hp);
   }
 }
+// ラッシュウェーブ：空きスロットが許すだけ即座に投入（headroom準拠＝安全弁は貫通しない）
+function rushWave(n){ for(let i=0;i<n;i++) spawnCustomer(); }
 // 皿をカウンター（バー）から上へ発射。loaded で寿司ありスタートを指定。
 function spawnPlate(loaded){
   balls.push({x:paddleX, y:CFG.paddleY-CFG.ballR-2,
@@ -223,10 +232,17 @@ function update(){
     }else{
       lastPlateAt=gElapsed; curPlateGap=plateInterval(); nextPlateT=gElapsed+curPlateGap;
     }
-    // 節目バナー（レベルが上がった瞬間に発火）
+    // 節目（層B）：レベルが上がった瞬間にバナー実況＋デビュー保証＋ラッシュウェーブ
     const lv=level();
     if(lv>prevLevel){
-      for(let mlv=prevLevel+1;mlv<=lv;mlv++) if(BANNERS[mlv]){ bannerText=BANNERS[mlv]; bannerUntil=gElapsed+CFG.bannerDur; }
+      for(let mlv=prevLevel+1;mlv<=lv;mlv++){
+        const ms=MILESTONES[mlv];
+        if(ms){
+          bannerText=ms.banner; bannerUntil=gElapsed+CFG.bannerDur;
+          if(ms.debutHp) debutQueue.push(ms.debutHp); // 到達後の最初の湧きで新HP帯を確定
+          if(ms.wave) rushWave(ms.wave);              // 空きスロットへ団体を即投入
+        }
+      }
       prevLevel=lv;
     }
     if(blocks.some(b=>b.alive && b.y+b.h>=CFG.paddleY)) state='lose'; // 唯一の敗北条件（行列到達）
