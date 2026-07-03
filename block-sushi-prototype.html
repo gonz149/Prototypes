@@ -10,33 +10,40 @@
     display:flex;flex-direction:column;align-items:center;justify-content:center;
     -webkit-user-select:none;user-select:none;touch-action:none;overflow:hidden}
   h1{font-size:18px;margin:8px 0 4px;letter-spacing:.05em}
-  #hud{font-size:13px;margin-bottom:6px;opacity:.9;display:flex;gap:14px}
+  #hud{font-size:13px;margin-bottom:4px;opacity:.95;display:flex;gap:14px;align-items:center}
   #hud b{color:#ffcf6b}
+  #hud .clock b{color:#ffe6a3}
+  #gaugewrap{width:min(96vw,480px);margin-bottom:6px;display:flex;align-items:center;gap:8px;
+    font-size:11px;opacity:.85}
+  #gauge{flex:1;height:7px;background:#3a2c20;border-radius:4px;overflow:hidden}
+  #gaugefill{height:100%;width:0;background:#ffcf6b}
+  #gauge.flash #gaugefill{background:#fff2c8}
   canvas{background:#2a1f17;border-radius:10px;box-shadow:0 6px 30px rgba(0,0,0,.5);
-    max-width:96vw;max-height:72vh;touch-action:none}
+    max-width:96vw;max-height:70vh;touch-action:none}
   #hint{font-size:12px;opacity:.6;margin-top:8px;text-align:center;line-height:1.6}
 </style>
 </head>
 <body>
   <h1>🍣 ブロック崩寿司 <span style="font-size:11px;opacity:.5">prototype</span></h1>
   <div id="hud">
-    <span>Lv <b id="lv">0</b></span>
-    <span>スコア <b id="score">0</b></span>
-    <span>満足 <b id="sat">0</b></span>
-    <span>皿(場) <b id="dishes">0</b></span>
-    <span>供給 <b id="rate">-</b></span>
+    <span class="clock">🕛 <b id="clock">11:00</b></span>
+    <span>提供 <b id="score">0</b>貫</span>
+    <span>お会計 <b id="sat">0</b>人</span>
+    <span>皿 <b id="dishes">0</b></span>
   </div>
+  <div id="gaugewrap"><span>厨房</span><div id="gauge"><div id="gaugefill"></div></div><span><b id="rate" style="color:#ffcf6b">-</b>秒</span></div>
   <canvas id="cv" width="480" height="640"></canvas>
   <div id="hint">バーを左右に動かして皿を打ち返す（マウス / スワイプ / ←→）<br>
-    寿司付きの皿を客に当てると必要貫数（🍣数）が1減り、0で満足退店＝HP分を得点。<br>
-    スコアでレベルが上がると客の湧きが速く・大食いが増える。客がバー到達でゲームオーバー。</div>
+    寿司付きの皿を客に当てると必要貫数（🍣数）が1減り、0で満足退店＝提供貫数を得点。<br>
+    時計（レベル）が進むと客の行列が速く・大食いが増える。行列がカウンター到達で閉店。</div>
 
 <script>
 const cv=document.getElementById('cv'),ctx=cv.getContext('2d');
 const W=cv.width,H=cv.height;
-const elLv=document.getElementById('lv'),elScore=document.getElementById('score'),
+const elClock=document.getElementById('clock'),elScore=document.getElementById('score'),
       elSat=document.getElementById('sat'),elDishes=document.getElementById('dishes'),
-      elRate=document.getElementById('rate');
+      elRate=document.getElementById('rate'),elGauge=document.getElementById('gauge'),
+      elGaugeFill=document.getElementById('gaugefill');
 
 // ---- 調整できるパラメータ（仕様の暫定値） ----
 const CFG={
@@ -47,7 +54,10 @@ const CFG={
   speed:5,
   retreatStep:18,          // ノックバック距離
   levelN:8,                // レベルアップに必要なスコア（level=floor(score/N)）
-  advanceSpeed:0.11,       // 客の前進速度（固定・脇役）
+  openHour:11,             // 開店時刻（Lv0=11:00, Lv+1で+1時間）
+  nightLevel:12,           // この床レベルで時計停止＝「深夜営業」
+  bannerDur:2.6,           // 節目バナーの表示秒
+  advanceSpeed:0.11,       // 客の前進速度（固定・脇役 / §4-4で固定確定）
   advanceDelay:8,          // 開始から客が動き出すまでの秒
   custBase:5.0,            // Lv0の湧き間隔（秒）
   custReduction:0.45,      // レベルあたりの湧き間隔 短縮量（秒）
@@ -70,14 +80,19 @@ const HP_TABLE=[
   {lv:5, w:{1:35, 2:30, 3:23, 5:12}},
 ];
 const HP_COLOR={1:'#e0b57a', 2:'#d59a55', 3:'#c47a3c', 5:'#9e5228'};
+// 節目バナー（HP帯の初登場レベルに同期。文言はすべて仮）
+const BANNERS={1:'🍽 ランチラッシュ！', 2:'👥 団体様ご来店', 3:'🍚 大食い自慢ご来店', 12:'🏮 深夜営業'};
 
 let paddleX, balls, blocks, score, satisfied, state, gameStartTime, nextCustT, nextPlateT, bw;
+let prevLevel, bannerText, bannerUntil, lastPlateAt, curPlateGap, satFlashUntil, gElapsed;
 // state: 'ready' | 'play' | 'lose'
 
 function level(){ return Math.floor(score/CFG.levelN); }
 function custInterval(){ return Math.max(CFG.custFloor, CFG.custBase-level()*CFG.custReduction); }
 function headroom(){ return Math.max(CFG.headFloor, CFG.headBase-level()*CFG.headReduction); }
 function plateInterval(){ return Math.max(CFG.plateFloor, CFG.plateBase-score*CFG.plateReduction); }
+function clockText(){ const lv=level(); if(lv>=CFG.nightLevel) return '深夜営業';
+  return (CFG.openHour+lv)+':00'; }
 function pickHp(){
   const lv=level(); let tab=HP_TABLE[0];
   for(const t of HP_TABLE) if(lv>=t.lv) tab=t;
@@ -91,6 +106,8 @@ function pickHp(){
 function reset(){
   paddleX=W/2; balls=[]; score=0; satisfied=0; buildBlocks();
   gameStartTime=null; nextCustT=CFG.custStart; nextPlateT=CFG.plateBase;
+  prevLevel=0; bannerText=''; bannerUntil=0; lastPlateAt=0; curPlateGap=CFG.plateBase;
+  satFlashUntil=0; gElapsed=0;
   state='ready'; draw();
 }
 function colX(c){ return CFG.blockGap+c*(bw+CFG.blockGap); }
@@ -180,7 +197,7 @@ function update(){
           if(m===overT||m===overB)ball.vy*=-1; else ball.vx*=-1;
           if(ball.loaded){
             ball.loaded=false; b.hp--;
-            if(b.hp<=0){ score+=b.maxHp; satisfied++; b.alive=false; } // 満足＝HP分をまとめて加算
+            if(b.hp<=0){ score+=b.maxHp; satisfied++; b.alive=false; satFlashUntil=gElapsed+0.25; } // 満足＝HP分をまとめて加算
             else knockback(b);                                        // 食いかけもノックバック
           }else knockback(b);                                          // 空の皿もノックバック
           break;
@@ -189,11 +206,17 @@ function update(){
     }
     balls=balls.filter(ball=>ball.y-CFG.ballR<=H); // 落ちた皿は退場（排出口）
 
-    const elapsed=(performance.now()-gameStartTime)/1000;
-    if(elapsed>=CFG.advanceDelay) blocks.forEach(b=>{ if(b.alive) b.y+=CFG.advanceSpeed; });
-    while(elapsed>=nextCustT){ for(let i=0;i<CFG.spawnBatch;i++) spawnCustomer(); nextCustT+=custInterval(); } // 湧き（量=spawnBatch、間隔はレベルで短縮）
-    while(elapsed>=nextPlateT){ spawnPlate(false); nextPlateT+=plateInterval(); } // 蛇口（ΣHPで短縮）
-    if(blocks.some(b=>b.alive && b.y+b.h>=CFG.paddleY)) state='lose'; // 唯一の敗北条件
+    gElapsed=(performance.now()-gameStartTime)/1000;
+    if(gElapsed>=CFG.advanceDelay) blocks.forEach(b=>{ if(b.alive) b.y+=CFG.advanceSpeed; });
+    while(gElapsed>=nextCustT){ for(let i=0;i<CFG.spawnBatch;i++) spawnCustomer(); nextCustT+=custInterval(); } // 湧き（量=spawnBatch、間隔はレベルで短縮）
+    while(gElapsed>=nextPlateT){ spawnPlate(false); lastPlateAt=nextPlateT; curPlateGap=plateInterval(); nextPlateT+=curPlateGap; } // 蛇口（ΣHPで短縮）
+    // 節目バナー（レベルが上がった瞬間に発火）
+    const lv=level();
+    if(lv>prevLevel){
+      for(let mlv=prevLevel+1;mlv<=lv;mlv++) if(BANNERS[mlv]){ bannerText=BANNERS[mlv]; bannerUntil=gElapsed+CFG.bannerDur; }
+      prevLevel=lv;
+    }
+    if(blocks.some(b=>b.alive && b.y+b.h>=CFG.paddleY)) state='lose'; // 唯一の敗北条件（行列到達）
     blocks=blocks.filter(b=>b.alive);
   }
   if(blocks) blocks.forEach(b=>{if(b.flash>0)b.flash--;});
@@ -221,18 +244,31 @@ function draw(){
   ctx.fillStyle='#8a5a2b';rr(paddleX-CFG.paddleW/2,CFG.paddleY,CFG.paddleW,CFG.paddleH,7);ctx.fill();
   if(state==='ready') drawPlate({x:paddleX,y:CFG.paddleY-CFG.ballR-2,loaded:true});
   else balls.forEach(drawPlate);
+  // 節目バナー
+  if(state==='play' && gElapsed<bannerUntil){
+    ctx.fillStyle='rgba(0,0,0,.5)';ctx.fillRect(0,H*0.22,W,54);
+    ctx.fillStyle='#ffcf6b';ctx.font='bold 26px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillText(bannerText,W/2,H*0.22+27);
+  }
+  // 開店前 / 閉店
   if(state!=='play'){
     ctx.fillStyle='rgba(0,0,0,.55)';ctx.fillRect(0,H/2-46,W,92);
-    ctx.fillStyle='#ffcf6b';ctx.font='bold 22px sans-serif';ctx.textAlign='center';
-    ctx.fillText(state==='lose'?'💢 客が押し寄せた…':'タップ / スペースで開始',W/2,H/2-6);
+    ctx.fillStyle='#ffcf6b';ctx.font='bold 22px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillText(state==='lose'?'🏮 閉店…':'タップ / スペースで開店',W/2,H/2-8);
     if(state==='lose'){ctx.font='14px sans-serif';ctx.fillStyle='#f5e9d6';
-      ctx.fillText('スコア '+score+'（満足 '+satisfied+' 人）  もう一度 → タップ',W/2,H/2+22);}
+      ctx.fillText('行列がカウンター到達　提供 '+score+'貫（お会計 '+satisfied+'人）',W/2,H/2+14);
+      ctx.fillText('開店する → タップ',W/2,H/2+34);}
   }
-  elLv.textContent=level();
+  // HUD
+  elClock.textContent=clockText();
   elScore.textContent=score;
   elSat.textContent=satisfied;
   elDishes.textContent=balls?balls.length:0;
-  elRate.textContent=(state==='play')?plateInterval().toFixed(1)+'秒':'-';
+  elRate.textContent=(state==='play')?plateInterval().toFixed(1):'-';
+  // 厨房ゲージ（次の皿までのクールタイム進捗。速くなるほど速く満ちる＝忙しさが見える）
+  const frac=(state==='play'&&curPlateGap>0)?Math.min(1,Math.max(0,(gElapsed-lastPlateAt)/curPlateGap)):0;
+  elGaugeFill.style.width=(frac*100)+'%';
+  elGauge.classList.toggle('flash', state==='play'&&gElapsed<satFlashUntil);
 }
 function loop(){update();draw();requestAnimationFrame(loop);}
 reset();loop();
