@@ -30,20 +30,21 @@
     <span>提供 <b id="score">0</b>貫</span>
     <span>お会計 <b id="sat">0</b>人</span>
     <span>皿 <b id="dishes">0</b></span>
+    <span>ストック <b id="stock">0</b></span>
   </div>
-  <div id="gaugewrap"><span>厨房</span><div id="gauge"><div id="gaugefill"></div></div><span><b id="rate" style="color:#ffcf6b">-</b>秒</span></div>
+  <div id="gaugewrap"><span>仕込み</span><div id="gauge"><div id="gaugefill"></div></div><span><b id="rate" style="color:#ffcf6b">-</b>秒</span></div>
   <canvas id="cv" width="480" height="640"></canvas>
-  <div id="hint">バーを左右に動かして皿を打ち返す（マウス / スワイプ / ←→）<br>
-    寿司付きの皿を客に当てると必要貫数（🍣数）が1減り、0で満足退店＝提供貫数を得点。<br>
-    時計（レベル）が進むと客の行列が速く・大食いが増える。行列がカウンター到達で閉店。</div>
+  <div id="hint">バーを左右に動かす（マウス / スワイプ / ←→）。<b>クリック / タップ / スペースで皿を発射</b>。<br>
+    皿は時間で仕込まれてストックに溜まる。発射した皿を打ち返すと寿司が載り、客に当てると必要貫数が減る。<br>
+    時計（レベル）が進むと行列が速く・大食いが増える。行列がカウンター到達で閉店。</div>
 
 <script>
 const cv=document.getElementById('cv'),ctx=cv.getContext('2d');
 const W=cv.width,H=cv.height;
 const elClock=document.getElementById('clock'),elScore=document.getElementById('score'),
       elSat=document.getElementById('sat'),elDishes=document.getElementById('dishes'),
-      elRate=document.getElementById('rate'),elGauge=document.getElementById('gauge'),
-      elGaugeFill=document.getElementById('gaugefill');
+      elStock=document.getElementById('stock'),elRate=document.getElementById('rate'),
+      elGauge=document.getElementById('gauge'),elGaugeFill=document.getElementById('gaugefill');
 
 // ---- 調整できるパラメータ（仕様の暫定値） ----
 const CFG={
@@ -66,9 +67,12 @@ const CFG={
   headBase:52,             // Lv0のヘッドルームY（この範囲に客がいなければ湧く）
   headReduction:2.5,       // レベルあたりの短縮量
   headFloor:40,            // ヘッドルームの床（重なり防止）
-  plateBase:10.0,           // 皿の基準供給間隔（秒）
-  plateReduction:0.12,     // 満足HP1点あたりの供給間隔 短縮量（秒）
-  plateFloor:1.2,          // 供給間隔の床
+  // --- 皿の仕込み（時間でストック、クリックで発射） ---
+  plateBase:10.0,          // 皿1枚の仕込み間隔（秒）
+  plateReduction:0.12,     // 満足HP1点あたりの仕込み間隔 短縮量（秒）
+  plateFloor:1.2,          // 仕込み間隔の床
+  stockMax:5,              // ストックの上限
+  stockInit:2,             // 開店時の初期ストック
 };
 
 // レベル別 HP分布（重み）。lv以下で最大のエントリを採用。
@@ -84,7 +88,7 @@ const HP_COLOR={1:'#e0b57a', 2:'#d59a55', 3:'#c47a3c', 5:'#9e5228'};
 const BANNERS={1:'🍽 ランチラッシュ！', 2:'👥 団体様ご来店', 3:'🍚 大食い自慢ご来店', 12:'🏮 深夜営業'};
 
 let paddleX, balls, blocks, score, satisfied, state, gameStartTime, nextCustT, nextPlateT, bw;
-let prevLevel, bannerText, bannerUntil, lastPlateAt, curPlateGap, satFlashUntil, gElapsed;
+let prevLevel, bannerText, bannerUntil, lastPlateAt, curPlateGap, satFlashUntil, gElapsed, stock;
 // state: 'ready' | 'play' | 'lose'
 
 function level(){ return Math.floor(score/CFG.levelN); }
@@ -107,7 +111,7 @@ function reset(){
   paddleX=W/2; balls=[]; score=0; satisfied=0; buildBlocks();
   gameStartTime=null; nextCustT=CFG.custStart; nextPlateT=CFG.plateBase;
   prevLevel=0; bannerText=''; bannerUntil=0; lastPlateAt=0; curPlateGap=CFG.plateBase;
-  satFlashUntil=0; gElapsed=0;
+  satFlashUntil=0; gElapsed=0; stock=0;
   state='ready'; draw();
 }
 function colX(c){ return CFG.blockGap+c*(bw+CFG.blockGap); }
@@ -135,14 +139,18 @@ function spawnCustomer(){
     addCustomer(cx, CFG.blockTop, pickHp());
   }
 }
-// 皿をカウンター（バー）から上へ供給。loaded で寿司ありスタートを指定。
+// 皿をカウンター（バー）から上へ発射。loaded で寿司ありスタートを指定。
 function spawnPlate(loaded){
   balls.push({x:paddleX, y:CFG.paddleY-CFG.ballR-2,
     vx:(Math.random()*2-1)*2, vy:-CFG.speed, loaded:!!loaded});
 }
-function start(){
-  if(state==='ready'){ state='play'; gameStartTime=performance.now(); spawnPlate(true); } // 初回は寿司あり
+// クリック＝ストックから1枚発射
+function firePlate(){ if(stock>0){ spawnPlate(true); stock--; } } // 発射する皿は寿司あり
+// クリック/タップ/スペースの共通ハンドラ
+function press(){
+  if(state==='ready'){ state='play'; gameStartTime=performance.now(); spawnPlate(true); stock=CFG.stockInit; } // 開店：初回は寿司あり＋初期ストック
   else if(state==='lose'){ reset(); }
+  else if(state==='play'){ firePlate(); }
 }
 // ノックバック：後続（同列で真上の客）に詰める形でクランプ
 function knockback(b){
@@ -162,12 +170,12 @@ function movePaddle(x){
 }
 cv.addEventListener('mousemove',e=>movePaddle(e.clientX));
 cv.addEventListener('touchmove',e=>{movePaddle(e.touches[0].clientX);e.preventDefault();},{passive:false});
-cv.addEventListener('mousedown',start);
-cv.addEventListener('touchstart',e=>{start();e.preventDefault();},{passive:false});
+cv.addEventListener('mousedown',press);
+cv.addEventListener('touchstart',e=>{ if(e.touches[0]) movePaddle(e.touches[0].clientX); press(); e.preventDefault();},{passive:false});
 addEventListener('keydown',e=>{
   if(e.key==='ArrowLeft')paddleX=Math.max(CFG.paddleW/2,paddleX-28);
   if(e.key==='ArrowRight')paddleX=Math.min(W-CFG.paddleW/2,paddleX+28);
-  if(e.key===' '){start();e.preventDefault();}
+  if(e.key===' '){press();e.preventDefault();}
 });
 
 // ---- 更新 ----
@@ -209,7 +217,12 @@ function update(){
     gElapsed=(performance.now()-gameStartTime)/1000;
     if(gElapsed>=CFG.advanceDelay) blocks.forEach(b=>{ if(b.alive) b.y+=CFG.advanceSpeed; });
     while(gElapsed>=nextCustT){ for(let i=0;i<CFG.spawnBatch;i++) spawnCustomer(); nextCustT+=custInterval(); } // 湧き（量=spawnBatch、間隔はレベルで短縮）
-    while(gElapsed>=nextPlateT){ spawnPlate(false); lastPlateAt=nextPlateT; curPlateGap=plateInterval(); nextPlateT+=curPlateGap; } // 蛇口（ΣHPで短縮）
+    // 皿の仕込み：時間でストックに +1（満タン中はタイマー停止）
+    if(stock<CFG.stockMax){
+      while(gElapsed>=nextPlateT && stock<CFG.stockMax){ stock++; lastPlateAt=nextPlateT; curPlateGap=plateInterval(); nextPlateT+=curPlateGap; }
+    }else{
+      lastPlateAt=gElapsed; curPlateGap=plateInterval(); nextPlateT=gElapsed+curPlateGap;
+    }
     // 節目バナー（レベルが上がった瞬間に発火）
     const lv=level();
     if(lv>prevLevel){
@@ -241,7 +254,17 @@ function draw(){
     ctx.font='15px serif';ctx.fillStyle='#2a1f17';
     ctx.fillText('🍣×'+b.hp, b.x+b.w/2, b.y+b.h/2);
   });
+  // バー（カウンター）
   ctx.fillStyle='#8a5a2b';rr(paddleX-CFG.paddleW/2,CFG.paddleY,CFG.paddleW,CFG.paddleH,7);ctx.fill();
+  // ストックのピップ（バー上に発射待ちの皿）
+  if(state==='play'){
+    const n=CFG.stockMax, step=Math.min(14,(CFG.paddleW-12)/n), x0=paddleX-step*(n-1)/2;
+    for(let i=0;i<n;i++){
+      ctx.beginPath();ctx.arc(x0+i*step, CFG.paddleY+CFG.paddleH+8, 3.4, 0, 7);
+      ctx.fillStyle=i<stock?'#f2efe6':'rgba(242,239,230,.18)';ctx.fill();
+    }
+  }
+  // 発射待ちの皿（ready時のプレビュー）
   if(state==='ready') drawPlate({x:paddleX,y:CFG.paddleY-CFG.ballR-2,loaded:true});
   else balls.forEach(drawPlate);
   // 節目バナー
@@ -264,9 +287,11 @@ function draw(){
   elScore.textContent=score;
   elSat.textContent=satisfied;
   elDishes.textContent=balls?balls.length:0;
+  elStock.textContent=stock+'/'+CFG.stockMax;
   elRate.textContent=(state==='play')?plateInterval().toFixed(1):'-';
-  // 厨房ゲージ（次の皿までのクールタイム進捗。速くなるほど速く満ちる＝忙しさが見える）
-  const frac=(state==='play'&&curPlateGap>0)?Math.min(1,Math.max(0,(gElapsed-lastPlateAt)/curPlateGap)):0;
+  // 仕込みゲージ（次の1枚までの進捗。満タンで100%）
+  let frac=0;
+  if(state==='play') frac=(stock>=CFG.stockMax)?1:Math.min(1,Math.max(0,(gElapsed-lastPlateAt)/curPlateGap));
   elGaugeFill.style.width=(frac*100)+'%';
   elGauge.classList.toggle('flash', state==='play'&&gElapsed<satFlashUntil);
 }
